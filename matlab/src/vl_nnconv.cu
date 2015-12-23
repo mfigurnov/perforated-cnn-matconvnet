@@ -909,8 +909,8 @@ void mexFunction(int nout, mxArray *out[],
                        derData.memory, filtersVolume) ;
       }
     }
-  } else if (convIndicesMode && microbatchSize > 1) {
-    // microBatches mode!
+  } else if (convIndicesMode) {
+    // microbatchSize specifies the number of images to stack for GEMM
     const int numMicrobatches = (data.geom.size + microbatchSize - 1) / microbatchSize;
     for (int microbatchIdx = 0; microbatchIdx < numMicrobatches; ++microbatchIdx) {
       int image = microbatchIdx * microbatchSize;
@@ -1044,6 +1044,10 @@ void mexFunction(int nout, mxArray *out[],
       }
     }
   } else {
+    // This branch catches corner cases: 1x1 convolutions (skipping im2col/col2im), and when
+    // vl_nnconv called without convIndices.
+    // It can be merged with the previous branch, but the number of conditionals inside is already
+    // way too high.
     for (int image = 0 ; image < data.geom.size ; ++image) {
       /*
        temp (phi(x)): m x k
@@ -1068,16 +1072,7 @@ void mexFunction(int nout, mxArray *out[],
 
         /* compute derFilters dz/dF */
         if (computeDerFilters) {
-          if (convIndicesMode) {
-            im2col_indexed_dispatch(gpuMode,
-                                    temp.memory,
-                                    data.memory + dataOffset,
-                                    convIndices.memoryInt,
-                                    convIndices.geom.numElements,
-                                    data.geom.height, data.geom.width, data.geom.depth, 1,
-                                    filters.geom.height, filters.geom.width) ;
-            tempMemory = temp.memory;
-          } else if (!is_1x1) {
+          if (!is_1x1) {
             im2col_dispatch(gpuMode,
                             temp.memory,
                             data.memory + dataOffset,
@@ -1139,15 +1134,7 @@ void mexFunction(int nout, mxArray *out[],
                            tempMemory + tempGrpOffset,
                            m) ;
           }
-          if (convIndicesMode) {
-            col2im_indexed_dispatch(gpuMode,
-                                    derData.memory + derDataOffset,
-                                    temp.memory,
-                                    convIndices.memoryInt,
-                                    convIndices.geom.numElements,
-                                    data.geom.height, data.geom.width, data.geom.depth, 1,
-                                    filters.geom.height, filters.geom.width);
-          } else if (!is_1x1) {
+          if (!is_1x1) {
             col2im_dispatch(gpuMode,
                             derData.memory + derDataOffset,
                             temp.memory,
@@ -1161,16 +1148,7 @@ void mexFunction(int nout, mxArray *out[],
         /* ---------------------------------------------------------- */
         /*                                               Forward mode */
         /* ---------------------------------------------------------- */
-        if (convIndicesMode) {
-          im2col_indexed_dispatch(gpuMode,
-                                  temp.memory,
-                                  data.memory + dataOffset,
-                                  convIndices.memoryInt,
-                                  convIndices.geom.numElements,
-                                  data.geom.height, data.geom.width, data.geom.depth, 1,
-                                  filters.geom.height, filters.geom.width) ;
-          tempMemory = temp.memory;
-        } else if (!is_1x1) {
+        if (!is_1x1) {
           im2col_dispatch(gpuMode,
                           temp.memory,
                           data.memory + dataOffset,
