@@ -11,7 +11,7 @@ This file is part of the VLFeat library and is made available under
 the terms of the BSD license (see the COPYING file).
 */
 
-#include "im2col.cpp"
+#include "im2col.hpp"
 #include "gpu.hpp"
 
 /* ---------------------------------------------------------------- */
@@ -149,6 +149,279 @@ template void im2col_gpu<double>(double* stacked,
                                  size_t padRight,
                                  size_t padTop,
                                  size_t padBottom);
+
+/* ---------------------------------------------------------------- */
+/*                                              im2col masked (GPU) */
+/* ---------------------------------------------------------------- */
+
+template <typename T>
+__global__ void
+im2col_gpu_masked_kernel(T* stacked,
+                         T const* data,
+                         int const* maskIndices,
+                         const int maskIndicesLength,
+                         const int numPatchesX,
+                         const int numPatchesY,
+                         const int numPatchSlices,
+                         const int width,
+                         const int height,
+                         const int windowWidth,
+                         const int windowHeight,
+                         const int strideX,
+                         const int strideY,
+                         const int padLeft,
+                         const int padTop)
+{
+  /* each kernel copies the pixels in an image patch for one channel */
+  int index = threadIdx.x + blockIdx.x * blockDim.x ;
+  if (index < numPatchSlices) {
+    /* 
+      get the patch slice (x,y,z) to copy
+     */
+    int idx = index % maskIndicesLength;
+    int x = maskIndices[idx];
+    int y = x / numPatchesX;
+    x %= numPatchesX;
+    int z = index / maskIndicesLength;
+
+    /* 
+     pick the top-left corer of the patch slice in the input image
+     */
+    int x_data = x * strideX - padLeft ;
+    int y_data = y * strideY - padTop ;
+    data += (z * height + y_data) * width + x_data ;
+
+    /* 
+     pick the column of the stacked image which contains this patch,
+     and move down along the column at the beginning of the patch slice
+     */
+    int patchSliceOffset = (windowWidth*windowHeight) * z ;
+    stacked += maskIndicesLength * patchSliceOffset + idx ;
+
+    /*
+     copy the patch slice
+     */
+    for (int v = 0 ; v < windowHeight ; ++v) {
+      for (int u = 0 ; u < windowWidth ; ++u) {
+        if (y_data + v >= 0 &&
+            y_data + v < height &&
+            x_data + u >= 0 &&
+            x_data + u < width) {
+          *stacked = data[v * width + u] ;
+        } else {
+          *stacked = 0 ;
+        }
+        stacked += maskIndicesLength ;
+      }
+    }
+  }
+}
+
+template <typename T>
+void im2col_masked_gpu(T* stacked,
+                       T const* data,
+                       int const* maskIndices,
+                       int maskIndicesLength,
+                       size_t width,
+                       size_t height,
+                       size_t depth,
+                       size_t windowWidth,
+                       size_t windowHeight,
+                       size_t strideX,
+                       size_t strideY,
+                       size_t padLeft,
+                       size_t padRight,
+                       size_t padTop,
+                       size_t padBottom)
+{
+  int numPatchesX = (width + (padLeft + padRight) - windowWidth)/strideX + 1 ;
+  int numPatchesY = (height + (padTop + padBottom) - windowHeight)/strideY + 1 ;
+  int numPatchSlices = maskIndicesLength * depth ;
+
+  /*
+   Each kernel copies a feature dimension of a patch.
+   */
+  im2col_gpu_masked_kernel<T>
+  <<< divideUpwards(numPatchSlices, VL_CUDA_NUM_THREADS), VL_CUDA_NUM_THREADS >>>
+  (stacked,
+   data,
+   maskIndices, maskIndicesLength,
+   numPatchesX,
+   numPatchesY,
+   numPatchSlices,
+   width, height,
+   windowWidth, windowHeight,
+   strideX, strideY,
+   padLeft, padTop) ;
+
+  if (cudaPeekAtLastError() != cudaSuccess) {
+    std::cout
+    <<"im2col_masked: CUDA kernel error ("
+    <<cudaGetErrorString(cudaPeekAtLastError())
+    <<")"<<std::endl ;
+  }
+}
+
+/* ---------------------------------------------------------------- */
+/*                                      im2col masked indices (GPU) */
+/* ---------------------------------------------------------------- */
+
+template <typename T>
+__global__ void
+im2col_gpu_masked_indices_kernel(T* __restrict__ stacked,
+                                 T const* __restrict__ data,
+                                 int const* __restrict__ indices,
+                                 const int indicesLength,
+                                 const int numPatchSlices,
+                                 const int dataSize)
+{
+  /* each kernel copies the pixels in an image patch for one channel */
+  int index = threadIdx.x + blockIdx.x * blockDim.x ;
+  if (index < numPatchSlices) {
+    int x = index;
+    int z = index / indicesLength;
+    x %= indicesLength;
+
+    int idxValue = indices[x];
+    stacked[index] = (idxValue != -1) ? data[z * dataSize + idxValue] : 0;
+  }
+}
+
+template <typename T>
+void im2col_masked_indices_gpu(T* stacked,
+                               T const* data,
+                               int const* indices,
+                               int indicesLength,
+                               size_t width,
+                               size_t height,
+                               size_t depth)
+{
+  int numPatchSlices = indicesLength * depth ;
+
+  im2col_gpu_masked_indices_kernel<T>
+  <<< divideUpwards(numPatchSlices, VL_CUDA_NUM_THREADS), VL_CUDA_NUM_THREADS >>>
+  (stacked,
+   data,
+   indices, indicesLength,
+   numPatchSlices,
+   width * height) ;
+
+  if (cudaPeekAtLastError() != cudaSuccess) {
+    std::cout
+    <<"im2col_gpu_masked_indices: CUDA kernel error ("
+    <<cudaGetErrorString(cudaPeekAtLastError())
+    <<")"<<std::endl ;
+  }
+}
+
+// Explicit instantiation
+template void im2col_masked_indices_gpu<float>(float* stacked,
+                                               float const* data,
+                                               int const* indices,
+                                               int indicesLength,
+                                               size_t width,
+                                               size_t height,
+                                               size_t depth);
+
+template void im2col_masked_indices_gpu<double>(double* stacked,
+                                                double const* data,
+                                                int const* indices,
+                                                int indicesLength,
+                                                size_t width,
+                                                size_t height,
+                                                size_t depth);
+
+
+/* ---------------------------------------------------------------- */
+/*                                        im2col with indices (GPU) */
+/* ---------------------------------------------------------------- */
+
+template <typename T>
+__global__ void
+im2col_gpu_indexed_kernel(T* __restrict__ stacked,
+                          T const* __restrict__ data,
+                          int const* __restrict__ indices,
+                          const int maskIndicesLength,
+                          const int dataSize,
+                          const int depth,
+                          const int depthCol,
+                          const int size,
+                          const int numPatchSlices)
+{
+  /* each kernel copies the pixels in an image patch for one channel */
+  int index = threadIdx.x + blockIdx.x * blockDim.x ;
+  if (index < numPatchSlices) {
+    int x = index;
+    int s = x / maskIndicesLength;
+    int d = s / size;
+    int c = d / depthCol;
+    x %= maskIndicesLength;
+    s %= size;
+    d %= depthCol;
+
+    int idxValue = indices[d * maskIndicesLength + x];
+    stacked[index] = (idxValue != -1) ? data[(s * depth + c) * dataSize + idxValue] : 0;
+  }
+}
+
+template <typename T>
+void im2col_indexed_gpu(T* stacked,
+                        T const* data,
+                        int const* indices,
+                        int indicesLength,
+                        size_t width,
+                        size_t height,
+                        size_t depth,
+                        size_t size,
+                        size_t windowWidth,
+                        size_t windowHeight)
+{
+  int numPatchSlices = indicesLength * depth * size ;
+  int depthCol = windowWidth * windowHeight;
+  int maskIndicesLength = indicesLength / depthCol;
+
+  im2col_gpu_indexed_kernel<T>
+  <<< divideUpwards(numPatchSlices, VL_CUDA_NUM_THREADS), VL_CUDA_NUM_THREADS >>>
+  (stacked,
+   data,
+   indices,
+   maskIndicesLength,
+   width * height,
+   depth,
+   depthCol,
+   size,
+   numPatchSlices) ;
+
+  if (cudaPeekAtLastError() != cudaSuccess) {
+    std::cout
+    <<"im2col_indexed_gpu: CUDA kernel error ("
+    <<cudaGetErrorString(cudaPeekAtLastError())
+    <<")"<<std::endl ;
+  }
+}
+
+// Explicit instantiation
+template void im2col_indexed_gpu<float>(float* stacked,
+                                        float const* data,
+                                        int const* indices,
+                                        int indicesLength,
+                                        size_t width,
+                                        size_t height,
+                                        size_t depth,
+                                        size_t size,
+                                        size_t windowWidth,
+                                        size_t windowHeight);
+
+template void im2col_indexed_gpu<double>(double* stacked,
+                                         double const* data,
+                                         int const* indices,
+                                         int indicesLength,
+                                         size_t width,
+                                         size_t height,
+                                         size_t depth,
+                                         size_t size,
+                                         size_t windowWidth,
+                                         size_t windowHeight);
 
 /* ---------------------------------------------------------------- */
 /*                                                     col2im (GPU) */
@@ -336,3 +609,147 @@ template void col2im_gpu<double>(double* data,
                                  size_t padRight,
                                  size_t padTop,
                                  size_t padBottom);
+
+/* ---------------------------------------------------------------- */
+/*                                        col2im with indices (GPU) */
+/* ---------------------------------------------------------------- */
+
+template <typename T>
+__global__ void
+col2im_gpu_indexed_kernel(T* __restrict__ data,
+                          T const* __restrict__ stacked,
+                          int const* __restrict__ indices,
+                          const int maskIndicesLength,
+                          const int dataSize,
+                          const int depth,
+                          const int depthCol,
+                          const int size,
+                          const int numPatchSlices)
+{
+  /* each kernel copies the pixels in an image patch for one channel */
+  int index = threadIdx.x + blockIdx.x * blockDim.x ;
+  if (index < numPatchSlices) {
+    int x = index;
+    int s = x / maskIndicesLength;
+    int d = s / size;
+    int c = d / depthCol;
+    x %= maskIndicesLength;
+    s %= size;
+    d %= depthCol;
+
+    int idxValue = indices[d * maskIndicesLength + x];
+    if (idxValue != -1) {
+      atomicAdd(data + (s * depth + c) * dataSize + idxValue, stacked[index]) ;
+    }
+  }
+}
+
+template <typename T>
+void col2im_indexed_gpu(T* data,
+                        T const* stacked,
+                        int const* indices,
+                        int indicesLength,
+                        size_t width,
+                        size_t height,
+                        size_t depth,
+                        size_t size,
+                        size_t windowWidth,
+                        size_t windowHeight)
+{
+  int numPatchSlices = indicesLength * depth * size ;
+  int depthCol = windowWidth * windowHeight;
+  int maskIndicesLength = indicesLength / depthCol;
+
+  cudaMemset(data, 0, sizeof(T)*width*height*depth*size);
+  col2im_gpu_indexed_kernel<T>
+  <<< divideUpwards(numPatchSlices, VL_CUDA_NUM_THREADS), VL_CUDA_NUM_THREADS >>>
+  (data,
+   stacked,
+   indices,
+   maskIndicesLength,
+   width * height,
+   depth,
+   depthCol,
+   size,
+   numPatchSlices) ;
+
+  if (cudaPeekAtLastError() != cudaSuccess) {
+    std::cout
+    <<"col2im_indexed_gpu: CUDA kernel error ("
+    <<cudaGetErrorString(cudaPeekAtLastError())
+    <<")"<<std::endl ;
+  }
+}
+
+// Explicit instantiation
+template void col2im_indexed_gpu<float>(float* data,
+                                        float const* stacked,
+                                        int const* indices,
+                                        int indicesLength,
+                                        size_t width,
+                                        size_t height,
+                                        size_t depth,
+                                        size_t size,
+                                        size_t windowWidth,
+                                        size_t windowHeight);
+
+template <typename T>
+__global__ void transpose23_kernel(T* transposed,
+                                   const T* data,
+                                   const int d1,
+                                   const int d2,
+                                   const int d3,
+                                   const int numPatchSlices)
+{
+  int index = threadIdx.x + blockIdx.x * blockDim.x ;
+  if (index < numPatchSlices) {
+    int x = index;
+    int y = x / d1;
+    int z = y / d2;
+    x %= d1;
+    y %= d2;
+
+    transposed[y*(d1*d3) + z*d1 + x] = data[z*(d1*d2) + y*d1 + x];
+  }
+}
+
+template <typename T>
+void transpose23_gpu(T* transposed,
+                     T const* data,
+                     size_t d1,
+                     size_t d2,
+                     size_t d3)
+{
+  int numPatchSlices = d1 * d2 * d3 ;
+
+  /*
+   Each kernel copies a feature dimension of a patch.
+   */
+  transpose23_kernel<T>
+  <<< divideUpwards(numPatchSlices, VL_CUDA_NUM_THREADS), VL_CUDA_NUM_THREADS >>>
+  (transposed,
+   data,
+   d1,
+   d2,
+   d3,
+   numPatchSlices) ;
+
+  if (cudaPeekAtLastError() != cudaSuccess) {
+    std::cout
+    <<"transpose23_gpu: CUDA kernel error ("
+    <<cudaGetErrorString(cudaPeekAtLastError())
+    <<")"<<std::endl ;
+  }
+}
+
+template void transpose23_gpu<float>(float* transposed,
+                                     float const* data,
+                                     size_t d1,
+                                     size_t d2,
+                                     size_t d3);
+
+template void transpose23_gpu<double>(double* transposed,
+                                      double const* data,
+                                      size_t d1,
+                                      size_t d2,
+                                      size_t d3);

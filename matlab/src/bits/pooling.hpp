@@ -54,6 +54,53 @@ void poolingBackward_cpu(T* dzdx,
                          size_t padTop,
                          size_t padBottom) ;
 
+template<typename T>
+void pooling_cpu_fast(T* pooled,
+                      T const* data,
+                      int const* indices,
+                      PoolMethod method,
+                      size_t dataSize,
+                      size_t depth,
+                      size_t windowSize,
+                      size_t pooledSize) ;
+
+template<typename T>
+void pooling_backward_cpu_fast(T* dzdx,
+                               T const* data,
+                               T const* dzdy,
+                               int const* indices,
+                               PoolMethod method,
+                               size_t dataSize,
+                               size_t depth,
+                               size_t windowSize,
+                               size_t pooledSize) ;
+
+void max_pooling_indices_cpu(int* indices,
+                             int const* inindices,
+                             size_t width,
+                             size_t height,
+                             size_t windowWidth,
+                             size_t windowHeight,
+                             size_t strideX,
+                             size_t strideY,
+                             size_t padLeft,
+                             size_t padRight,
+                             size_t padTop,
+                             size_t padBottom) ;
+
+void avg_pooling_indices_cpu(int* indices,
+                             int const* inindices,
+                             size_t width,
+                             size_t height,
+                             size_t windowWidth,
+                             size_t windowHeight,
+                             size_t strideX,
+                             size_t strideY,
+                             size_t padLeft,
+                             size_t padRight,
+                             size_t padTop,
+                             size_t padBottom) ;
+
 #ifdef ENABLE_GPU
 template<typename T>
 void pooling_gpu(T* pooled,
@@ -87,6 +134,28 @@ void poolingBackward_gpu(T* dzdx,
                          size_t padRight,
                          size_t padTop,
                          size_t padBottom) ;
+
+template<typename T>
+void pooling_gpu_fast(T* pooled,
+                      T const* data,
+                      int const* indices,
+                      PoolMethod method,
+                      size_t dataSize,
+                      size_t depth,
+                      size_t windowSize,
+                      size_t pooledSize) ;
+
+template<typename T>
+void pooling_backward_gpu_fast(T* dzdx,
+                               T const* data,
+                               T const* dzdy,
+                               int const* indices,
+                               PoolMethod method,
+                               size_t dataSize,
+                               size_t depth,
+                               size_t windowSize,
+                               size_t pooledSize) ;
+
 #endif
 
 #endif /* defined(VL_NNPOOLING_H) */

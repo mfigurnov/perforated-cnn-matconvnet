@@ -20,7 +20,40 @@ end
 for l=1:numel(net.layers)
   switch net.layers{l}.type
     case 'conv'
-      for f = {'filters', 'biases', 'filtersMomentum', 'biasesMomentum'}
+      for f = {'filters', 'biases', 'filtersMomentum', 'biasesMomentum', 'maskindices', ...
+        'outindices', 'opindices'}
+        f = char(f) ;
+        if isfield(net.layers{l}, f)
+          net.layers{l}.(f) = moveop(net.layers{l}.(f)) ;
+        end
+      end
+      for f = {'pad', 'stride'}
+        f = char(f) ;
+        if isfield(net.layers{l}, f)
+          net.layers{l}.(f) = double(net.layers{l}.(f)) ;
+        end
+      end
+    case 'pool'
+      if isfield(net.layers{l}, 'opindices')
+        % transpose pooling opindices for GPU
+        opindices = net.layers{l}.opindices;
+        if strcmp(destination, 'gpu') && ~isa(opindices, 'gpuArray')
+          % CPU -> GPU
+          opindices = permute(opindices, [2 3 1]);
+        elseif strcmp(destination, 'cpu') && isa(opindices, 'gpuArray')
+          % GPU -> CPU
+          opindices = permute(opindices, [3 1 2]);
+        end
+        net.layers{l}.opindices = moveop(opindices);
+      end
+      for f = {'pad', 'stride', 'pool'}
+        f = char(f) ;
+        if isfield(net.layers{l}, f)
+          net.layers{l}.(f) = double(net.layers{l}.(f)) ;
+        end
+      end
+    case 'perfknn'
+      for f = {'maskindices', 'outindices', 'weights'}
         f = char(f) ;
         if isfield(net.layers{l}, f)
           net.layers{l}.(f) = moveop(net.layers{l}.(f)) ;

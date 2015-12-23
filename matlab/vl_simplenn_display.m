@@ -1,4 +1,4 @@
-function info = vl_simplenn_display(net, res)
+function [info, total_mflops, res_mem] = vl_simplenn_display(net, res)
 % VL_SIMPLENN_DISPLAY  Simple CNN statistics
 %    VL_SIMPLENN_DISPLAY(NET) prints statistics about the network NET.
 
@@ -10,10 +10,12 @@ function info = vl_simplenn_display(net, res)
 
 fields={'layer', 'type', 'support', 'stride', 'pad', 'dim', 'fdim', 'field', 'mem'};
 if nargin > 1
-  fields = {fields{:}, 'xwhd', 'xmem', 'dxmem'} ;
+  fields = {fields{:}, 'xmem', 'dxmem', 'mflops'} ;
 end
 
 do_print = (nargout == 0) ;
+total_mflops = 0;
+res_mem = 0;
 
 for w=fields
   switch char(w)
@@ -21,6 +23,7 @@ for w=fields
     case 'stride', s = 'stride' ;
     case 'padding', s = 'pad' ;
     case 'field', s = 'rec. field' ;
+    case 'gflops', s = 'gflops' ;
     case 'dim', s = 'out dim' ;
     case 'fdim', s = 'filt dim' ;
     case 'mem', s = 'c/g net KB' ;
@@ -114,7 +117,7 @@ for w=fields
         s=sprintf('%d', dimension(1,l)) ;
       case 'xwhd'
         sz=size(res(l+1).x) ;
-        s=sprintf('%dx%dx%d%d', sz(1), sz(2), sz(3), sz(4)')
+        s=sprintf('%dx%dx%d%d', sz(1), sz(2), sz(3), sz(4)') ;
       case 'xmem'
         [a,b]=xmem(res(l+1).x) ;
         rmem(1:2,l) = [a;b] ;
@@ -123,17 +126,44 @@ for w=fields
         [a,b]=xmem(res(l+1).dzdx) ;
         rmem(1:2,l) = [a;b] ;
         s=sprintf('%.0f/%.0f', a/1024^2, b/1024^2) ;
+      case 'mflops'
+        switch ly.type
+          case 'conv'
+            szIn = size(res(l).x);
+            szOut = size(res(l+1).x);
+            szFilters = size(ly.filters);
+            numGroups = szIn(3) / szFilters(3);
+            mflops = prod(szOut(1:2)) * prod(szFilters(1:4)) * 2 ...
+              / (1e6 * numGroups);
+            s=sprintf('%.2f', mflops) ;
+            total_mflops = total_mflops + mflops;
+          case 'relu'
+            szOut = size(res(l+1).x);
+            mflops = prod(szOut(1:3)) / 1e6;
+            s=sprintf('%.2f', mflops) ;
+            %total_mflops = total_mflops + mflops;
+          case 'pool'
+            szOut = size(res(l+1).x);
+            mflops = prod(szOut(1:3)) * prod(ly.pool(:)) / 1e6;
+            s=sprintf('%.2f', mflops) ;
+            %total_mflops = total_mflops + mflops;  
+          otherwise
+            s='n/a' ;
+        end
     end
     if do_print, fprintf('|%7s', s) ; end
   end
   if do_print, fprintf('|\n') ; end
 end
-if do_print
+if 1
   [a,b] = xmem(net) ;
   fprintf('total network CPU/GPU memory: %.1f/%1.f MB\n', a/1024^2, b/1024^2) ;
   if nargin > 1
     [a,b] = xmem(res) ;
+    res_mem = a + b;
     fprintf('total result CPU/GPU memory: %.1f/%1.f MB\n', a/1024^2, b/1024^2) ;
+    
+    fprintf('total MFLOPS: %.2f\n', total_mflops);
   end
 end
 

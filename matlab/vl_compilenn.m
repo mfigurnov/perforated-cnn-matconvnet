@@ -152,7 +152,10 @@ cpp_src={...
   fullfile(root, 'matlab', 'src', 'bits', 'subsample.cpp')} ;
 mex_src={...
   fullfile(root, 'matlab', 'src', 'vl_nnconv.cpp'), ...
+  fullfile(root, 'matlab', 'src', 'vl_nnconvidx.cpp'), ...
   fullfile(root, 'matlab', 'src', 'vl_nnpool.cpp'), ...
+  fullfile(root, 'matlab', 'src', 'vl_nnpoolidx.cpp'), ...
+  fullfile(root, 'matlab', 'src', 'vl_nnpoolfast.cpp'), ...
   fullfile(root, 'matlab', 'src', 'vl_nnnormalize.cpp')} ;
 cu_src={...
   fullfile(root, 'matlab', 'src', 'bits', 'im2col_gpu.cu'), ...
@@ -161,7 +164,10 @@ cu_src={...
   fullfile(root, 'matlab', 'src', 'bits', 'subsample_gpu.cu')} ;
 mex_cu_src={...
   fullfile(root, 'matlab', 'src', 'vl_nnconv.cu'), ...
+  fullfile(root, 'matlab', 'src', 'vl_nnconvidx.cu'), ...
   fullfile(root, 'matlab', 'src', 'vl_nnpool.cu'), ...
+  fullfile(root, 'matlab', 'src', 'vl_nnpoolidx.cu'), ...
+  fullfile(root, 'matlab', 'src', 'vl_nnpoolfast.cu'), ...
   fullfile(root, 'matlab', 'src', 'vl_nnnormalize.cu')} ;
 
 % --------------------------------------------------------------------
@@ -239,12 +245,15 @@ if opts.enableGpu
       end
 
     case 'nvcc'
-      mex_cu_opts = [mex_cu_opts {'-cxx'}];
       switch arch
         case 'maci64'
+          mex_cu_opts = [mex_cu_opts {'-cxx'}];
           mex_cu_opts{end+1} = 'LDFLAGS=$LDFLAGS -stdlib=libstdc++' ;
           mex_cu_opts{end+1} = 'CXXFLAGS=$CXXFLAGS -stdlib=libstdc++' ;
         case 'glnxa64'
+          % Mex is unable to recognise whether C or C++ when linking only,
+          % adding -cxx option solves that.
+          mex_cu_opts = [mex_cu_opts {'-cxx'}];
           mex_cu_libs{end+1} = '-lmwgpu' ;
       end
   end
@@ -433,7 +442,7 @@ switch computer('arch')
   case 'win64'
     [~, paths] = system('where nvcc.exe');
     paths = strtrim(paths);
-    paths = patsh(strfind(paths, '.exe'));
+    paths = paths(strfind(paths, '.exe'));
   case {'maci64', 'glnxa64'}
     [~, paths] = system('which nvcc');
     paths = strtrim(paths) ;
@@ -452,7 +461,7 @@ paths = {getenv('MW_NVCC_PATH')} ;
 paths = [paths, which_nvcc(opts)] ;
 for v = {'5.5', '6.0', '6.5', '7.0'}
   paths{end+1} = sprintf('/Developer/NVIDIA/CUDA-%s/bin/nvcc', char(v)) ;
-  paths{end+1} = sprintf('C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v%s', char(v)) ;
+  paths{end+1} = sprintf('C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v%s\\bin\\nvcc.exe', char(v)) ;
 end
 paths{end+1} = sprintf('/usr/local/cuda/bin/nvcc') ;
 
@@ -488,7 +497,7 @@ function [valid, cuver]  = validate_nvcc(opts, nvcc_path)
 valid = false ;
 cuver = 0 ;
 if ~isempty(nvcc_path)
-  [status, output] = system(sprintf('%s --version', nvcc_path)) ;
+  [status, output] = system(sprintf('"%s" --version', nvcc_path)) ;
   valid = (status == 0) ;
 end
 if ~valid, return ; end
@@ -530,7 +539,7 @@ try
       sprintf('-gencode=arch=compute_%s,code=\\\"sm_%s,compute_%s\\\" ', ...
               arch_code, arch_code, arch_code) ;
 catch
-  opts.verbose && fprintf(['%s:\tCUDA: cannot determine the capabilities of the installed GPU;'
+  opts.verbose && fprintf(['%s:\tCUDA: cannot determine the capabilities of the installed GPU;' ...
                       'falling back to default\n'], mfilename);
   cudaArch = opts.defCudaArch;
 end

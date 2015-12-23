@@ -36,8 +36,8 @@ typedef enum PackedDataMode_
   empty,
   matlabArray,
   matlabArrayWrapper,
-  matlabGpuArray,
-  matlabGpuArrayWrapper
+  matlabGpuArray,       // Owned by mex
+  matlabGpuArrayWrapper // Owned by matlab
 } PackedDataMode ;
 
 typedef struct PackedData_
@@ -46,6 +46,7 @@ typedef struct PackedData_
   PackedDataGeometry geom ;
   mwSize memorySize ;
   float * memory ;
+  int * memoryInt ;
   mxArray * array ;
 #ifdef ENABLE_GPU
   mxGPUArray * gpuArray ;
@@ -139,6 +140,48 @@ packed_data_init_with_array (PackedData * map, mxArray const* array)
   map->memorySize = map->geom.numElements * sizeof(float) ;
 }
 
+void
+packed_data_init_with_array_int (PackedData * map, mxArray const* array)
+{
+  mwSize const * dimensions ;
+  mwSize numDimensions ;
+  mxClassID classID ;
+  packed_data_init_empty(map) ;
+
+#ifdef ENABLE_GPU
+  if (mxIsGPUArray(array)) {
+    map->mode = matlabGpuArrayWrapper ;
+    map->array = (mxArray*) array ;
+    map->gpuArray = (mxGPUArray*) mxGPUCreateFromMxArray(array) ;
+    map->memoryInt = (int*) mxGPUGetDataReadOnly(map->gpuArray) ;
+    classID = mxGPUGetClassID(map->gpuArray) ;
+    dimensions = mxGPUGetDimensions(map->gpuArray) ;
+    numDimensions = mxGPUGetNumberOfDimensions(map->gpuArray) ;
+  } else
+#endif
+  {
+    if (!mxIsNumeric(array)) {
+      mexErrMsgTxt("An input is not a numeric array (or GPU support not compiled).") ;
+    }
+    map->mode = matlabArrayWrapper ;
+    map->array = (mxArray*) array ;
+#ifdef ENABLE_GPU
+    map->gpuArray = NULL ;
+#endif
+    map->memoryInt = (int*) mxGetData(map->array) ;
+    classID = mxGetClassID(map->array) ;
+    dimensions = mxGetDimensions(map->array) ;
+    numDimensions = mxGetNumberOfDimensions(map->array) ;
+  }
+  packed_data_geom_init(&map->geom,
+                        classID,
+                        (numDimensions >= 1) ? dimensions[0] : 1,
+                        (numDimensions >= 2) ? dimensions[1] : 1,
+                        (numDimensions >= 3) ? dimensions[2] : 1,
+                        (numDimensions >= 4) ? dimensions[3] : 1) ;
+  map->memorySize = map->geom.numElements * sizeof(int) ;
+}
+
 /*
  This function initializes a PackedData structure from a desired data geometry:
 
@@ -212,6 +255,108 @@ packed_data_init_with_geom (PackedData * map,
     mexMakeArrayPersistent(map->array) ;
   }
 }
+
+/*
+ This function initializes a PackedData structure from a desired data geometry:
+
+ - In CPU mode, the function allocates a MATLAB array (self->array).
+ - In GPU mode, the function allocates a MATLAB GPU array (self->gpuArray).
+
+ The flag self->isOwner is set to @c true to indicate that the data was
+ allocated here. If @c initialize is @c true, then the data is zeroed.
+ */
+
+void
+packed_data_init_with_geom_int (PackedData * map,
+                                bool gpuMode,
+                                PackedDataGeometry geom,
+                                bool persistent,
+                                bool initialize,
+                                int value)
+{
+  assert(geom.classID == mxINT32_CLASS) ;
+  mwSize dimensions [4] = {geom.height, geom.width, geom.depth, geom.size} ;
+  mwSize dimensions_ [4] = {0} ;
+
+  packed_data_init_empty(map) ;
+  map->geom = geom ;
+  map->memorySize = map->geom.numElements * sizeof(int) ;
+
+  /* create a CPU array with the specified values */
+  if (!gpuMode) {
+    map->mode = matlabArray ;
+    if (!initialize || (initialize && value != 0)) {
+      /* do not initialize, or initialize with something other than 0 */
+      map->memoryInt = (int*)mxMalloc(map->memorySize) ;
+      map->array = mxCreateNumericArray(4, dimensions_, mxINT32_CLASS, mxREAL) ;
+#ifdef ENABLE_GPU
+      map->gpuArray = NULL ;
+#endif
+      mxSetData(map->array, map->memoryInt) ;
+      mxSetDimensions(map->array, dimensions, 4) ;
+      if (initialize) {
+        for (int i = 0 ; i < geom.numElements ; ++i) { map->memoryInt[i] = value ; }
+      }
+    } else {
+      /* initialize with zero */
+      map->array = mxCreateNumericArray(4, dimensions, mxINT32_CLASS, mxREAL) ;
+      map->memoryInt = (int*)mxGetData(map->array) ;
+    }
+  }
+
+#ifdef ENABLE_GPU
+  else {
+    map->mode = matlabGpuArray ;
+    map->gpuArray = mxGPUCreateGPUArray
+      (4, dimensions, mxINT32_CLASS, mxREAL,
+       (initialize && value == 0) ? MX_GPU_INITIALIZE_VALUES : MX_GPU_DO_NOT_INITIALIZE) ;
+    map->array = mxGPUCreateMxArrayOnGPU(map->gpuArray) ;
+    map->memoryInt = (int*) mxGPUGetData(map->gpuArray) ;
+    if (initialize && value != 0) {
+      /* initialize with something other than zero */
+      int * memoryInt = (int*)mxMalloc(map->memorySize) ;
+      for (int i = 0 ; i < geom.numElements ; ++i) { memoryInt[i] = value ; }
+      cudaError_t err = cudaMemcpy(map->memoryInt, memoryInt, map->memorySize, cudaMemcpyHostToDevice) ;
+      if (err != cudaSuccess) {
+        mexPrintf("cudaMemcpy: error (%s)\n", cudaGetErrorString(err)) ;
+      }
+      mxFree(memoryInt) ;
+    }
+  }
+#endif
+
+  if (persistent) {
+    mexMakeArrayPersistent(map->array) ;
+  }
+}
+
+/*
+ * Checks whether an GPU array is valid.
+ * Becomes invalid e.g. in case of re-initialisation of the GPU.
+ */
+bool packed_data_is_valid (PackedData * map)
+{
+  bool res = true;
+  switch (map->mode) {
+  case matlabArray:
+    break ;
+  case matlabArrayWrapper:
+    break ;
+  case empty:
+    break ;
+#ifdef ENABLE_GPU
+  case matlabGpuArray:
+    res = mxGPUIsValidGPUData(map->array);
+    break ;
+  case matlabGpuArrayWrapper:
+    res = mxGPUIsValidGPUData(map->array);
+    break ;
+#endif
+    default: assert(false) ;
+  }
+  return res;
+}
+
 
 /*
  This function deinits a packed data structure. It does the following:

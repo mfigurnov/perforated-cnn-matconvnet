@@ -365,7 +365,6 @@ __global__ void avgPoolingBackward_gpu_kernel(
   }
 }
 
-
 template<typename T>
 void poolingBackward_gpu(T* dzdx,
                          T const* data,
@@ -469,3 +468,462 @@ void maxPoolingBackward_gpu<double>(double* dzdx,
                                     size_t padTop,
                                     size_t padBottom) ;
 #endif
+
+
+template<typename T, int windowSize>
+__global__ void max_pooling_gpu_kernel_fast
+(T* __restrict__ pooled,
+ const T*  __restrict__ data,
+ const int* __restrict__ indices,
+ const int pooledSize,
+ const int pooledVolume,
+ const int dataSize)
+{
+  int pooledIndex = threadIdx.x + blockIdx.x * blockDim.x;
+  if (pooledIndex < pooledVolume) {
+    /* pooledIndex = x
+                   + z * (pooledWidth * pooledHeight) ;
+     */
+    int px = pooledIndex ;
+    int pz = px / pooledSize ;
+    px %= pooledSize ;
+    data += pz * dataSize ;
+
+    int prevIndex = -1 ;
+    T bestValue ;
+    #pragma unroll
+    for (int i = 0; i < windowSize; ++i) {
+      int index = indices[i * pooledSize + px];
+      if (i != 0 && index == prevIndex) {
+        break;
+      }
+      prevIndex = index;
+
+      T value = data[index] ;
+      if (i == 0 || value > bestValue) {
+        bestValue = value;
+      }
+    }
+    pooled[pooledIndex] = bestValue ;
+  }
+}
+
+template<typename T>
+__global__ void max_pooling_gpu_kernel_fast_2
+(T* __restrict__ pooled,
+ const T*  __restrict__ data,
+ const int* __restrict__ indices,
+ const int pooledSize,
+ const int pooledVolume,
+ const int windowSize,
+ const int dataSize)
+{
+  int pooledIndex = threadIdx.x + blockIdx.x * blockDim.x;
+  if (pooledIndex < pooledVolume) {
+    /* pooledIndex = x
+                   + z * (pooledWidth * pooledHeight) ;
+     */
+    int px = pooledIndex ;
+    int pz = px / pooledSize ;
+    px %= pooledSize ;
+    data += pz * dataSize ;
+
+    int prevIndex = -1 ;
+    T bestValue ;
+    #pragma unroll
+    for (int i = 0; i < windowSize; ++i) {
+      int index = indices[i * pooledSize + px];
+      if (i != 0 && index == prevIndex) {
+        break;
+      }
+      prevIndex = index;
+
+      T value = data[index] ;
+      if (i == 0 || value > bestValue) {
+        bestValue = value;
+      }
+    }
+    pooled[pooledIndex] = bestValue ;
+  }
+}
+
+template<typename T, int windowSize>
+__global__ void avg_pooling_gpu_kernel_fast
+(T* __restrict__ pooled,
+ const T*  __restrict__ data,
+ const int* __restrict__ indices,
+ const int pooledSize,
+ const int pooledVolume,
+ const int dataSize)
+{
+  int pooledIndex = threadIdx.x + blockIdx.x * blockDim.x;
+  if (pooledIndex < pooledVolume) {
+    /* pooledIndex = x
+                   + z * (pooledWidth * pooledHeight) ;
+     */
+    int px = pooledIndex ;
+    int pz = px / pooledSize ;
+    px %= pooledSize ;
+    data += pz * dataSize ;
+
+    T accum = 0 ;
+    T poolSize = 0 ;
+    #pragma unroll
+    for (int i = 0; i < windowSize; ++i) {
+      int index = indices[i * pooledSize + px];
+      if (index != -1) {
+        accum += data[index] ;
+        ++poolSize ;
+      }
+    }
+    pooled[pooledIndex] = accum / poolSize ;
+  }
+}
+
+template<typename T>
+__global__ void avg_pooling_gpu_kernel_fast_2
+(T* __restrict__ pooled,
+ const T*  __restrict__ data,
+ const int* __restrict__ indices,
+ const int pooledSize,
+ const int pooledVolume,
+ const int windowSize,
+ const int dataSize)
+{
+  int pooledIndex = threadIdx.x + blockIdx.x * blockDim.x;
+  if (pooledIndex < pooledVolume) {
+    /* pooledIndex = x
+                   + z * (pooledWidth * pooledHeight) ;
+     */
+    int px = pooledIndex ;
+    int pz = px / pooledSize ;
+    px %= pooledSize ;
+    data += pz * dataSize ;
+
+    T accum = 0 ;
+    T poolSize = 0 ;
+    #pragma unroll
+    for (int i = 0; i < windowSize; ++i) {
+      int index = indices[i * pooledSize + px];
+      if (index != -1) {
+        accum += data[index] ;
+        ++poolSize ;
+      }
+    }
+    pooled[pooledIndex] = accum / poolSize ;
+  }
+}
+
+template<typename T>
+void pooling_gpu_fast(T* pooled,
+                      T const* data,
+                      int const* indices,
+                      PoolMethod method,
+                      size_t dataSize,
+                      size_t depth,
+                      size_t windowSize,
+                      size_t pooledSize)
+{
+  int pooledVolume = pooledSize * depth ;
+#define MAX_POOL_GPU(_windowSize) case _windowSize: \
+    max_pooling_gpu_kernel_fast<T, _windowSize> \
+    <<< divideUpwards(pooledVolume, VL_CUDA_NUM_THREADS), VL_CUDA_NUM_THREADS >>> \
+    (pooled, data, indices, pooledSize, pooledVolume, dataSize); \
+    break
+#define AVG_POOL_GPU(_windowSize) case _windowSize: \
+    avg_pooling_gpu_kernel_fast<T, _windowSize> \
+    <<< divideUpwards(pooledVolume, VL_CUDA_NUM_THREADS), VL_CUDA_NUM_THREADS >>> \
+    (pooled, data, indices, pooledSize, pooledVolume, dataSize); \
+    break
+
+  switch (method) {
+    case NN_POOL_MAX:
+      switch (windowSize) {
+        MAX_POOL_GPU(1);
+        MAX_POOL_GPU(4);
+        MAX_POOL_GPU(9);
+        MAX_POOL_GPU(16);
+        MAX_POOL_GPU(25);
+        MAX_POOL_GPU(36);
+        MAX_POOL_GPU(49);
+        default:
+          max_pooling_gpu_kernel_fast_2<T>
+          <<< divideUpwards(pooledVolume, VL_CUDA_NUM_THREADS), VL_CUDA_NUM_THREADS >>>
+          (pooled, data, indices, pooledSize, pooledVolume, windowSize, dataSize);
+          break;
+      }
+      break;
+    case NN_POOL_AVG:
+      switch (windowSize) {
+        AVG_POOL_GPU(1);
+        AVG_POOL_GPU(4);
+        AVG_POOL_GPU(9);
+        AVG_POOL_GPU(16);
+        AVG_POOL_GPU(25);
+        AVG_POOL_GPU(36);
+        AVG_POOL_GPU(49);
+        default:
+          avg_pooling_gpu_kernel_fast_2<T>
+          <<< divideUpwards(pooledVolume, VL_CUDA_NUM_THREADS), VL_CUDA_NUM_THREADS >>>
+          (pooled, data, indices, pooledSize, pooledVolume, windowSize, dataSize);
+          break;
+      }
+      break;
+    default:
+      assert(false);
+  }
+#undef MAX_POOL_GPU
+#undef AVG_POOL_GPU
+  if (cudaGetLastError() != cudaSuccess) {
+    std::cout
+    <<"max_pooling_gpu_kernel_fast error ("
+    <<cudaGetErrorString(cudaGetLastError())
+    <<")"<<std::endl ;
+  }
+}
+
+template void pooling_gpu_fast<float>(float* pooled,
+                                      float const* data,
+                                      int const* indices,
+                                      PoolMethod method,
+                                      size_t dataSize,
+                                      size_t depth,
+                                      size_t windowSize,
+                                      size_t pooledSize) ;
+
+template<typename T, int windowSize>
+__global__ void max_pooling_backward_gpu_kernel_fast
+(T* __restrict__ dzdx,
+ const T*  __restrict__ data,
+ const T*  __restrict__ dzdy,
+ const int* __restrict__ indices,
+ const int pooledSize,
+ const int pooledVolume,
+ const int dataSize)
+{
+  int pooledIndex = threadIdx.x + blockIdx.x * blockDim.x;
+  if (pooledIndex < pooledVolume) {
+    /* pooledIndex = x
+                   + z * (pooledWidth * pooledHeight) ;
+     */
+    int px = pooledIndex ;
+    int pz = px / pooledSize ;
+    px %= pooledSize ;
+    data += pz * dataSize ;
+    dzdx += pz * dataSize ;
+
+    int bestIndex;
+    T bestValue;
+    #pragma unroll
+    for (int i = 0; i < windowSize; ++i) {
+      int index = indices[i * pooledSize + px] ;
+      T value = data[index];
+      if (i == 0 || value > bestValue) {
+        bestIndex = index;
+        bestValue = value;
+      }
+    }
+    atomicAdd(dzdx + bestIndex, dzdy[pooledIndex]) ;
+  }
+}
+
+template<typename T>
+__global__ void max_pooling_backward_gpu_kernel_fast_2
+(T* __restrict__ dzdx,
+ const T*  __restrict__ data,
+ const T*  __restrict__ dzdy,
+ const int* __restrict__ indices,
+ const int pooledSize,
+ const int pooledVolume,
+ const int windowSize,
+ const int dataSize)
+{
+  int pooledIndex = threadIdx.x + blockIdx.x * blockDim.x;
+  if (pooledIndex < pooledVolume) {
+    /* pooledIndex = x
+                   + z * (pooledWidth * pooledHeight) ;
+     */
+    int px = pooledIndex ;
+    int pz = px / pooledSize ;
+    px %= pooledSize ;
+    data += pz * dataSize ;
+    dzdx += pz * dataSize ;
+
+    int bestIndex;
+    T bestValue;
+    #pragma unroll
+    for (int i = 0; i < windowSize; ++i) {
+      int index = indices[i * pooledSize + px] ;
+      T value = data[index];
+      if (i == 0 || value > bestValue) {
+        bestIndex = index;
+        bestValue = value;
+      }
+    }
+    atomicAdd(dzdx + bestIndex, dzdy[pooledIndex]) ;
+  }
+}
+
+template<typename T, int windowSize>
+__global__ void avg_pooling_backward_gpu_kernel_fast
+(T* __restrict__ dzdx,
+ const T*  __restrict__ data,
+ const T*  __restrict__ dzdy,
+ const int* __restrict__ indices,
+ const int pooledSize,
+ const int pooledVolume,
+ const int dataSize)
+{
+  int pooledIndex = threadIdx.x + blockIdx.x * blockDim.x;
+  if (pooledIndex < pooledVolume) {
+    /* pooledIndex = x
+                   + z * (pooledWidth * pooledHeight) ;
+     */
+    int px = pooledIndex ;
+    int pz = px / pooledSize ;
+    px %= pooledSize ;
+    data += pz * dataSize ;
+    dzdx += pz * dataSize ;
+
+    T poolSize = 0;
+    #pragma unroll
+    for (int i = 0; i < windowSize; ++i) {
+      int index = indices[i * pooledSize + px] ;
+      if (index != -1) {
+        ++poolSize;
+      }
+    }
+
+    if (poolSize) {
+      #pragma unroll
+      for (int i = 0; i < windowSize; ++i) {
+        int index = indices[i * pooledSize + px] ;
+        if (index != -1) {
+          atomicAdd(dzdx + index, dzdy[pooledIndex] / poolSize) ;
+        }
+      }
+    }
+  }
+}
+
+template<typename T>
+__global__ void avg_pooling_backward_gpu_kernel_fast_2
+(T* __restrict__ dzdx,
+ const T*  __restrict__ data,
+ const T*  __restrict__ dzdy,
+ const int* __restrict__ indices,
+ const int pooledSize,
+ const int pooledVolume,
+ const int windowSize,
+ const int dataSize)
+{
+  int pooledIndex = threadIdx.x + blockIdx.x * blockDim.x;
+  if (pooledIndex < pooledVolume) {
+    /* pooledIndex = x
+                   + z * (pooledWidth * pooledHeight) ;
+     */
+    int px = pooledIndex ;
+    int pz = px / pooledSize ;
+    px %= pooledSize ;
+    data += pz * dataSize ;
+    dzdx += pz * dataSize ;
+
+    T poolSize = 0;
+    #pragma unroll
+    for (int i = 0; i < windowSize; ++i) {
+      int index = indices[i * pooledSize + px] ;
+      if (index != -1) {
+        ++poolSize;
+      }
+    }
+
+    if (poolSize) {
+      #pragma unroll
+      for (int i = 0; i < windowSize; ++i) {
+        int index = indices[i * pooledSize + px] ;
+        if (index != -1) {
+          atomicAdd(dzdx + index, dzdy[pooledIndex] / poolSize) ;
+        }
+      }
+    }
+  }
+}
+
+template<typename T>
+void pooling_backward_gpu_fast(T* dzdx,
+                               T const* data,
+                               T const* dzdy,
+                               int const* indices,
+                               PoolMethod method,
+                               size_t dataSize,
+                               size_t depth,
+                               size_t windowSize,
+                               size_t pooledSize)
+{
+  int pooledVolume = pooledSize * depth ;
+#define MAX_POOL_BACK_GPU(_windowSize) case _windowSize: \
+    max_pooling_backward_gpu_kernel_fast<T, _windowSize> \
+    <<< divideUpwards(pooledVolume, VL_CUDA_NUM_THREADS), VL_CUDA_NUM_THREADS >>> \
+    (dzdx, data, dzdy, indices, pooledSize, pooledVolume, dataSize); \
+    break
+#define AVG_POOL_BACK_GPU(_windowSize) case _windowSize: \
+    avg_pooling_backward_gpu_kernel_fast<T, _windowSize> \
+    <<< divideUpwards(pooledVolume, VL_CUDA_NUM_THREADS), VL_CUDA_NUM_THREADS >>> \
+    (dzdx, data, dzdy, indices, pooledSize, pooledVolume, dataSize); \
+    break
+
+  switch (method) {
+    case NN_POOL_MAX:
+      switch (windowSize) {
+        MAX_POOL_BACK_GPU(1);
+        MAX_POOL_BACK_GPU(4);
+        MAX_POOL_BACK_GPU(9);
+        MAX_POOL_BACK_GPU(16);
+        MAX_POOL_BACK_GPU(25);
+        MAX_POOL_BACK_GPU(36);
+        MAX_POOL_BACK_GPU(49);
+        default:
+          max_pooling_backward_gpu_kernel_fast_2<T>
+          <<< divideUpwards(pooledVolume, VL_CUDA_NUM_THREADS), VL_CUDA_NUM_THREADS >>>
+          (dzdx, data, dzdy, indices, pooledSize, pooledVolume, windowSize, dataSize);
+          break;
+      }
+      break;
+    case NN_POOL_AVG:
+      switch (windowSize) {
+        AVG_POOL_BACK_GPU(1);
+        AVG_POOL_BACK_GPU(4);
+        AVG_POOL_BACK_GPU(9);
+        AVG_POOL_BACK_GPU(16);
+        AVG_POOL_BACK_GPU(25);
+        AVG_POOL_BACK_GPU(36);
+        AVG_POOL_BACK_GPU(49);
+        default:
+          avg_pooling_backward_gpu_kernel_fast_2<T>
+          <<< divideUpwards(pooledVolume, VL_CUDA_NUM_THREADS), VL_CUDA_NUM_THREADS >>>
+          (dzdx, data, dzdy, indices, pooledSize, pooledVolume, windowSize, dataSize);
+          break;
+      }
+      break;
+    default:
+      assert(false);
+  }
+#undef MAX_POOL_BACK_GPU
+#undef AVG_POOL_BACK_GPU
+  if (cudaGetLastError() != cudaSuccess) {
+    std::cout
+    <<"max_pooling_backward_gpu_kernel_fast error ("
+    <<cudaGetErrorString(cudaGetLastError())
+    <<")"<<std::endl ;
+  }
+}
+
+template void pooling_backward_gpu_fast<float>(float* pooled,
+                                               float const* data,
+                                               float const* dzdy,
+                                               int const* indices,
+                                               PoolMethod method,
+                                               size_t dataSize,
+                                               size_t depth,
+                                               size_t windowSize,
+                                               size_t pooledSize) ;

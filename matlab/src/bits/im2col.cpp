@@ -161,6 +161,49 @@ template void im2col_cpu<double>(double* stacked,
                                  size_t padBottom);
 
 /* ---------------------------------------------------------------- */
+/*                          im2col with precalculated indices (CPU) */
+/* ---------------------------------------------------------------- */
+
+template <typename T>
+void im2col_indexed_cpu(T* __restrict__ stacked,
+                        T const* __restrict__ data,
+                        int const* __restrict__ indices,
+                        int indicesSize,
+                        int width,
+                        int height,
+                        int depth,
+                        int size,
+                        int windowWidth,
+                        int windowHeight)
+{
+  int depthCol = windowWidth * windowHeight;
+  int maskIndicesLength = indicesSize / depthCol;
+
+  for (int s = 0; s < size; ++s) {
+    for (int c = 0; c < depth; ++c) {
+      for (int d = 0; d < depthCol; ++d) {
+        for (int x = 0; x < maskIndicesLength; ++x) {
+          int idxValue = indices[d * maskIndicesLength + x];
+          stacked[((c * depthCol + d) * size + s) * maskIndicesLength + x] =
+            (idxValue != -1) ? data[(s * depth + c) * width * height + idxValue] : 0;
+        }
+      }
+    }
+  }
+}
+
+template void im2col_indexed_cpu<float>(float* stacked,
+                                        float const* data,
+                                        int const* indices,
+                                        int indicesSize,
+                                        int width,
+                                        int height,
+                                        int depth,
+                                        int size,
+                                        int windowWidth,
+                                        int windowHeight);
+
+/* ---------------------------------------------------------------- */
 /*                                                     col2im (CPU) */
 /* ---------------------------------------------------------------- */
 
@@ -245,4 +288,125 @@ template void col2im_cpu<double>(double* data,
                                  size_t padTop,
                                  size_t padBottom);
 
+template<typename T>
+void col2im_indexed_cpu(T* data,
+                        T const* stacked,
+                        int const* indices,
+                        int indicesSize,
+                        int width,
+                        int height,
+                        int depth,
+                        int size,
+                        int windowWidth,
+                        int windowHeight)
+{
+  memset(data, 0, sizeof(T)*width*height*depth*size);
 
+  int depthCol = windowWidth * windowHeight;
+  int maskIndicesLength = indicesSize / depthCol;
+
+  for (int s = 0; s < size; ++s) {
+    for (int c = 0; c < depth; ++c) {
+      for (int d = 0; d < depthCol; ++d) {
+        for (int x = 0; x < maskIndicesLength; ++x) {
+          int idxValue = indices[d * maskIndicesLength + x];
+          if (idxValue != -1) {
+            data[(s * depth + c) * width * height + idxValue] += stacked[((c * depthCol + d) * size + s) * maskIndicesLength + x];
+          }
+        }
+      }
+    }
+  }
+}
+
+template void col2im_indexed_cpu<float>(float* data,
+                                        float const* stacked,
+                                        int const* indices,
+                                        int indicesSize,
+                                        int width,
+                                        int height,
+                                        int depth,
+                                        int size,
+                                        int windowWidth,
+                                        int windowHeight);
+
+template void col2im_indexed_cpu<double>(double* data,
+                                         double const* stacked,
+                                         int const* indices,
+                                         int indicesSize,
+                                         int width,
+                                         int height,
+                                         int depth,
+                                         int size,
+                                         int windowWidth,
+                                         int windowHeight);
+
+
+template<typename T>
+void transpose23_cpu(T* transposed,
+                     T const* data,
+                     size_t d1,
+                     size_t d2,
+                     size_t d3)
+{
+  for (int k = 0; k < d3; ++k) {
+    for (int j = 0; j < d2; ++j) {
+      memcpy(transposed + j*(d1*d3) + k*d1, data + k*(d1*d2) + j*d1, d1 * sizeof(float));
+    }
+  }
+}
+template void transpose23_cpu<float>(float* transposed,
+                                     float const* data,
+                                     size_t d1,
+                                     size_t d2,
+                                     size_t d3);
+
+template void transpose23_cpu<double>(double* transposed,
+                                      double const* data,
+                                      size_t d1,
+                                      size_t d2,
+                                      size_t d3);
+
+
+void conv_indices_cpu(int* indices,
+                      int indicesLength,
+                      int const* inIndices,
+                      int const* maskIndices,
+                      int maskIndicesLength,
+                      int width,
+                      int height,
+                      int depth,
+                      int windowWidth,
+                      int windowHeight,
+                      int strideX,
+                      int strideY,
+                      int padLeft,
+                      int padRight,
+                      int padTop,
+                      int padBottom)
+{
+  int height_col = (height + (padTop + padBottom) - windowHeight) / strideY + 1;
+  int width_col = (width + (padLeft + padRight) - windowWidth) / strideX + 1;
+  int depth_col = windowHeight * windowWidth;
+  assert(indicesLength == maskIndicesLength * depth_col);
+  for (int c = 0; c < depth_col; ++c) {
+    int w_offset = c % windowWidth;
+    int h_offset = (c / windowWidth) % windowHeight;
+    for (int i = 0; i < maskIndicesLength; ++i) {
+      int index = maskIndices ? maskIndices[i] : i;
+      int h = index / width_col;
+      int w = index % width_col;
+      int h_pad = h * strideY - padTop + h_offset;
+      int w_pad = w * strideX - padLeft + w_offset;
+      if (h_pad >= 0 && h_pad < height && w_pad >= 0 && w_pad < width) {
+        int curIndex = h_pad * width + w_pad;
+        if (inIndices) {
+          curIndex = inIndices[curIndex];
+        }
+        indices[c * maskIndicesLength + i] = curIndex;
+      }
+      else
+        indices[c * maskIndicesLength + i] = -1;
+    }
+  }
+}

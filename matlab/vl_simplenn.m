@@ -122,6 +122,7 @@ opts.conserveMemory = false ;
 opts.sync = false ;
 opts.disableDropout = false ;
 opts.freezeDropout = false ;
+opts.accumulateGradients = false ;
 opts = vl_argparse(opts, varargin);
 
 n = numel(net.layers) ;
@@ -150,9 +151,27 @@ for i=1:n
   res(i).time = tic ;
   switch l.type
     case 'conv'
-      res(i+1).x = vl_nnconv(res(i).x, l.filters, l.biases, 'pad', l.pad, 'stride', l.stride) ;
+      res(i+1).aux = vl_getfielddefault(l, 'opindices');
+      rate = vl_getfielddefault(l, 'rate');
+      if ~isempty(rate)
+        microbatchsize = min(size(res(i).x, 4), floor(1 / rate));
+      else
+        microbatchsize = 1;
+      end
+      res(i+1).x = vl_nnconv(res(i).x, l.filters, l.biases, 'pad', l.pad, 'stride', l.stride, ...
+        'convindices', res(i+1).aux, 'microbatchsize', microbatchsize) ;
+      outputshape = vl_getfielddefault(l, 'outputshape');
+      if ~isempty(outputshape)
+        sz = size(res(i+1).x);
+        res(i+1).x = reshape(res(i+1).x, [outputshape(1) outputshape(2) sz(3) sz(4)]);
+      end
     case 'pool'
-      res(i+1).x = vl_nnpool(res(i).x, l.pool, 'pad', l.pad, 'stride', l.stride, 'method', l.method) ;
+      res(i+1).aux = vl_getfielddefault(l, 'opindices');
+      if ~isempty(res(i+1).aux)
+        res(i+1).x = vl_nnpoolfast(res(i).x, res(i+1).aux, 'method', l.method) ;
+      else
+        res(i+1).x = vl_nnpool(res(i).x, l.pool, 'pad', l.pad, 'stride', l.stride, 'method', l.method) ;
+      end
     case 'normalize'
       res(i+1).x = vl_nnnormalize(res(i).x, l.param) ;
     case 'softmax'
@@ -173,14 +192,20 @@ for i=1:n
       else
         [res(i+1).x, res(i+1).aux] = vl_nndropout(res(i).x, 'rate', l.rate) ;
       end
+    case 'perfzeros'
+      res(i+1).x = vl_nnperf_zeros(res(i).x, l.maskindices) ;
+    case 'perfknn'
+      res(i+1).x = vl_nnperf_knn(res(i).x, l.maskindices, l.outindices, l.weights) ;
     case 'custom'
       res(i+1) = l.forward(l, res(i), res(i+1)) ;
     otherwise
       error('Unknown layer type %s', l.type) ;
   end
-  if opts.conserveMemory & ~doder & i < numel(net.layers) - 1
-    % TODO: forget unnecesary intermediate computations even when
-    % derivatives are required
+  forget = opts.conserveMemory ;
+  forget = forget & (~doder || strcmp(l.type, 'relu')) ;
+  forget = forget & ~(strcmp(l.type, 'loss') || strcmp(l.type, 'softmaxloss')) ;
+  forget = forget & (~isfield(l, 'rememberOutput') || ~l.rememberOutput) ;
+  if forget
     res(i).x = [] ;
   end
   if gpuMode & opts.sync
@@ -198,13 +223,41 @@ if doder
     res(i).backwardTime = tic ;
     switch l.type
       case 'conv'
+        rate = vl_getfielddefault(l, 'rate');
+        if ~isempty(rate)
+          microbatchsize = min(size(res(i+1).x, 4), floor(1 / rate));
+        else
+          microbatchsize = 1;
+        end
+        dzdx = res(i+1).dzdx;
+        outputshape = vl_getfielddefault(l, 'outputshape');
+        if ~isempty(outputshape)
+          sz = size(dzdx);
+          dzdx = reshape(dzdx, [sz(1)*sz(2) 1 sz(3) sz(4)]);
+        end
+        if opts.accumulateGradients
+          derfilters = res(i).dzdw{1};
+          derbiases = res(i).dzdw{2};
+        else
+          derfilters = [];
+          derbiases = [];
+        end
         [res(i).dzdx, res(i).dzdw{1}, res(i).dzdw{2}] = ...
             vl_nnconv(res(i).x, l.filters, l.biases, ...
-                      res(i+1).dzdx, ...
-                      'pad', l.pad, 'stride', l.stride) ;
+                      dzdx, ...
+                      'pad', l.pad, 'stride', l.stride, ...
+                      'convindices', res(i+1).aux, ...
+                      'microbatchsize', microbatchsize, ...
+                      'derfilters', derfilters, 'derbiases', derbiases) ;
+        clear derfilters derbiases dzdx
       case 'pool'
-        res(i).dzdx = vl_nnpool(res(i).x, l.pool, res(i+1).dzdx, ...
-          'pad', l.pad, 'stride', l.stride, 'method', l.method) ;
+        if ~isempty(res(i+1).aux)
+          res(i).dzdx = vl_nnpoolfast(res(i).x, res(i+1).aux, res(i+1).dzdx, ...
+            'method', l.method) ;
+        else
+          res(i).dzdx = vl_nnpool(res(i).x, l.pool, res(i+1).dzdx, ...
+            'pad', l.pad, 'stride', l.stride, 'method', l.method) ;
+        end
       case 'normalize'
         res(i).dzdx = vl_nnnormalize(res(i).x, l.param, res(i+1).dzdx) ;
       case 'softmax'
@@ -214,7 +267,13 @@ if doder
       case 'softmaxloss'
         res(i).dzdx = vl_nnsoftmaxloss(res(i).x, l.class, res(i+1).dzdx) ;
       case 'relu'
-        res(i).dzdx = vl_nnrelu(res(i).x, res(i+1).dzdx) ;
+        if ~isempty(res(i).x)
+          res(i).dzdx = vl_nnrelu(res(i).x, res(i+1).dzdx) ;
+        else
+          % if res(i).x is empty, it has been optimized away, so we use this
+          % hack (which works only for ReLU):
+          res(i).dzdx = vl_nnrelu(res(i+1).x, res(i+1).dzdx) ;
+        end
       case 'noffset'
         res(i).dzdx = vl_nnnoffset(res(i).x, l.param, res(i+1).dzdx) ;
       case 'dropout'
@@ -223,11 +282,15 @@ if doder
         else
           res(i).dzdx = vl_nndropout(res(i).x, res(i+1).dzdx, 'mask', res(i+1).aux) ;
         end
+      case 'perfzeros'
+        res(i).dzdx = vl_nnperf_zeros(res(i).x, l.maskindices, res(i+1).dzdx) ;
       case 'custom'
         res(i) = l.backward(l, res(i), res(i+1)) ;
     end
-    if opts.conserveMemory
+    if opts.conserveMemory && i+1 < numel(net.layers) - 1
       res(i+1).dzdx = [] ;
+      res(i+1).x = [] ;
+      res(i+1).aux = [] ;
     end
     if gpuMode & opts.sync
       wait(gpuDevice) ;
