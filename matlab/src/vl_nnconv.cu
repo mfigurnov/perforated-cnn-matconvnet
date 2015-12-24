@@ -991,7 +991,7 @@ void mexFunction(int nout, mxArray *out[],
                        alpha,
                        data.memory, filtersVolume,
                        derOutput.memory, filters.geom.size,
-                       beta,
+                       (float)(derFiltersInitialized > 0),
                        derFilters.memory, filtersVolume) ;
       }
       if (computeDerBiases && hasBiases) {
@@ -1001,7 +1001,7 @@ void mexFunction(int nout, mxArray *out[],
                        alpha,
                        allOnes.memory, q,
                        derOutput.memory, filters.geom.size,
-                       beta,
+                       (float)(derBiasesInitialized > 0),
                        derBiases.memory, q) ;
       }
       if (computeDerData) {
@@ -1212,7 +1212,7 @@ void mexFunction(int nout, mxArray *out[],
           }
         }
 
-        /* compute derData dz/dbias */
+        /* compute derBiases dz/dbias */
         if (computeDerBiases & hasBiases) {
           sgemv_dispatch(gpuMode, 't',
                          m, filters.geom.size,
