@@ -153,17 +153,19 @@ for i=1:n
     case 'conv'
       res(i+1).aux = vl_getfielddefault(l, 'opindices');
       rate = vl_getfielddefault(l, 'rate');
-      if ~isempty(rate)
+      if isfield(l, 'rate')
         microbatchsize = min(size(res(i).x, 4), floor(1 / rate));
       else
         microbatchsize = 1;
       end
       res(i+1).x = vl_nnconv(res(i).x, l.filters, l.biases, 'pad', l.pad, 'stride', l.stride, ...
         'convindices', res(i+1).aux, 'microbatchsize', microbatchsize) ;
-      outputshape = vl_getfielddefault(l, 'outputshape');
-      if ~isempty(outputshape)
+
+      % This code is used in fractional stride: reshape first two dimensions from n^2 x 1 to n x n
+      outputShape = vl_getfielddefault(l, 'outputShape');
+      if ~isempty(outputShape)
         sz = size(res(i+1).x);
-        res(i+1).x = reshape(res(i+1).x, [outputshape(1) outputshape(2) sz(3) sz(4)]);
+        res(i+1).x = reshape(res(i+1).x, [outputShape(1) outputShape(2) sz(3) sz(4)]);
       end
     case 'pool'
       res(i+1).aux = vl_getfielddefault(l, 'opindices');
@@ -230,8 +232,8 @@ if doder
           microbatchsize = 1;
         end
         dzdx = res(i+1).dzdx;
-        outputshape = vl_getfielddefault(l, 'outputshape');
-        if ~isempty(outputshape)
+        outputShape = vl_getfielddefault(l, 'outputShape');
+        if ~isempty(outputShape)
           sz = size(dzdx);
           dzdx = reshape(dzdx, [sz(1)*sz(2) 1 sz(3) sz(4)]);
         end

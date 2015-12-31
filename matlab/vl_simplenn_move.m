@@ -37,6 +37,7 @@ for l=1:numel(net.layers)
       if isfield(net.layers{l}, 'opindices')
         % transpose pooling opindices for GPU
         opindices = net.layers{l}.opindices;
+        % CPU and GPU implementations use different order of opindices tensor to improve memory coalescing
         if strcmp(destination, 'gpu') && ~isa(opindices, 'gpuArray')
           % CPU -> GPU
           opindices = permute(opindices, [2 3 1]);
