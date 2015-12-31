@@ -113,23 +113,6 @@ void im2col_gpu(T* stacked,
                 size_t padBottom) ;
 
 template <typename T>
-void im2col_masked_gpu(T* stacked,
-                       T const* data,
-                       int const* maskIndices,
-                       int maskIndicesLength,
-                       size_t width,
-                       size_t height,
-                       size_t depth,
-                       size_t windowWidth,
-                       size_t windowHeight,
-                       size_t strideX,
-                       size_t strideY,
-                       size_t padLeft,
-                       size_t padRight,
-                       size_t padTop,
-                       size_t padBottom) ;
-
-template <typename T>
 void im2col_indexed_gpu(T* stacked,
                         T const* data,
                         int const* indices,

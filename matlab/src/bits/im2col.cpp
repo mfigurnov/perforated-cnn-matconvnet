@@ -176,19 +176,28 @@ void im2col_indexed_cpu(T* __restrict__ stacked,
                         int windowWidth,
                         int windowHeight)
 {
-  int depthCol = windowWidth * windowHeight;
-  int maskIndicesLength = indicesSize / depthCol;
-
-  for (int s = 0; s < size; ++s) {
+  if (size == 1) {
     for (int c = 0; c < depth; ++c) {
-      for (int d = 0; d < depthCol; ++d) {
-        for (int x = 0; x < maskIndicesLength; ++x) {
-          int idxValue = indices[d * maskIndicesLength + x];
-          stacked[((c * depthCol + d) * size + s) * maskIndicesLength + x] =
-            (idxValue != -1) ? data[(s * depth + c) * width * height + idxValue] : 0;
-        }
+      for (int x = 0; x < indicesSize; ++x) {
+        int idxValue = indices[x];
+        stacked[c * indicesSize + x] = (idxValue != -1) ? data[c * width * height + idxValue] : 0;
       }
     }
+  } else {
+    int depthCol = windowWidth * windowHeight;
+    int maskIndicesLength = indicesSize / depthCol;
+
+    for (int s = 0; s < size; ++s) {
+      for (int c = 0; c < depth; ++c) {
+        for (int d = 0; d < depthCol; ++d) {
+          for (int x = 0; x < maskIndicesLength; ++x) {
+            int idxValue = indices[d * maskIndicesLength + x];
+            stacked[((c * depthCol + d) * size + s) * maskIndicesLength + x] =
+              (idxValue != -1) ? data[(s * depth + c) * width * height + idxValue] : 0;
+          }
+        }
+      }
+    }    
   }
 }
 
@@ -302,16 +311,27 @@ void col2im_indexed_cpu(T* data,
 {
   memset(data, 0, sizeof(T)*width*height*depth*size);
 
-  int depthCol = windowWidth * windowHeight;
-  int maskIndicesLength = indicesSize / depthCol;
-
-  for (int s = 0; s < size; ++s) {
+  if (size == 1) {
     for (int c = 0; c < depth; ++c) {
-      for (int d = 0; d < depthCol; ++d) {
-        for (int x = 0; x < maskIndicesLength; ++x) {
-          int idxValue = indices[d * maskIndicesLength + x];
-          if (idxValue != -1) {
-            data[(s * depth + c) * width * height + idxValue] += stacked[((c * depthCol + d) * size + s) * maskIndicesLength + x];
+      for (int x = 0; x < indicesSize; ++x) {
+        int idxValue = indices[x];
+        if (idxValue != -1) {
+          data[c * width * height + idxValue] += stacked[c * indicesSize + x];
+        }
+      }
+    }
+  } else {
+    int depthCol = windowWidth * windowHeight;
+    int maskIndicesLength = indicesSize / depthCol;
+
+    for (int s = 0; s < size; ++s) {
+      for (int c = 0; c < depth; ++c) {
+        for (int d = 0; d < depthCol; ++d) {
+          for (int x = 0; x < maskIndicesLength; ++x) {
+            int idxValue = indices[d * maskIndicesLength + x];
+            if (idxValue != -1) {
+              data[(s * depth + c) * width * height + idxValue] += stacked[((c * depthCol + d) * size + s) * maskIndicesLength + x];
+            }
           }
         }
       }

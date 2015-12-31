@@ -12,6 +12,7 @@ end
 disp('testing vl_nnconv with square, non square, and fully connected filters') ;
 n = 3 ;
 fn = 5 ;
+for microbatchsize=[1 2]
 for bias=[false true]
     for fw=[1 3 5 18]
         for fh=[1 2 3 9]
@@ -34,12 +35,13 @@ for bias=[false true]
             end
             y = vl_nnconv(x,w,b,'convindices',convindices,'verbose') ;
             dzdy = grandn(size(y),'single') ;
-            [dzdx,dzdw,dzdb] = vl_nnconv(x,w,b,dzdy,'convindices',convindices,'microbatchsize',2,'verbose') ;
-            vl_testder(@(x) vl_nnconv(x,w,b,'convindices',convindices,'microbatchsize',2), x, dzdy, dzdx, range * 1e-2) ;
-            vl_testder(@(w) vl_nnconv(x,w,b,'convindices',convindices,'microbatchsize',2), w, dzdy, dzdw, range * 1e-2) ;
-            vl_testder(@(b) vl_nnconv(x,w,b,'convindices',convindices,'microbatchsize',2), b, dzdy, dzdb, range * 1e-2) ;
+            [dzdx,dzdw,dzdb] = vl_nnconv(x,w,b,dzdy,'convindices',convindices,'microbatchsize',microbatchsize,'verbose') ;
+            vl_testder(@(x) vl_nnconv(x,w,b,'convindices',convindices,'microbatchsize',microbatchsize), x, dzdy, dzdx, range * 1e-2) ;
+            vl_testder(@(w) vl_nnconv(x,w,b,'convindices',convindices,'microbatchsize',microbatchsize), w, dzdy, dzdw, range * 1e-2) ;
+            vl_testder(@(b) vl_nnconv(x,w,b,'convindices',convindices,'microbatchsize',microbatchsize), b, dzdy, dzdb, range * 1e-2) ;
         end
     end
+end
 end
 
 end
