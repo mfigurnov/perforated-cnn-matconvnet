@@ -33,9 +33,11 @@ Navigate into `acceleration` directory. There is a script per network:
 2. AlexNet: `alexnet_greedy_perforation`
 3. VGG-16: `vgg_greedy_perforation`
 
-Make sure to set `dataDir` path in the AlexNet and VGG-16 scripts if you want to run experiments on ImageNet.
-Change `useGpuTimings` setting to run the experiment to make a perforated network for GPU device:
+Set `dataDir` path in the AlexNet and VGG-16 scripts if you want to build perforated networks for ImageNet.
+Change the `useGpuTimings` setting to select the target device for a perforated network (CPU or GPU).
+Example:
 ```matlab
+setup;
 cifar_greedy_perforation('useGpuTimings', true);
 ```
 
