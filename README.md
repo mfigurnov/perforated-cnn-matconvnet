@@ -6,6 +6,8 @@ Michael Figurnov, Dmitry Vetrov, Pushmeet Kohli. PerforatedCNNs: Acceleration th
 
 The code is based on MatConvNet from December 2014, with some backports (such as more aggressive memory savings for ReLU).
 
+See also [Caffe](https://github.com/mfigurnov/perforated-cnn-caffe) implementation of PerforatedCNNs.
+
 ## Installation
 
 Clone the repository, run MATLAB, go to `acceleration` directory. Compile the code:
